@@ -94,7 +94,7 @@ static void* loop(void* arg) {
     (void) arg;
     while(1) {
         int slow = ev.shift ? 5 : 1;
-        usleep(1331 * slow);
+        usleep(1337 * slow);
         if (!ev.mouse) {
             pthread_mutex_lock(&lock);
             loop_enabled = false;
