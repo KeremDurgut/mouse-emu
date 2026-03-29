@@ -47,7 +47,7 @@ static void add_keyboard(const char *path) {
         return 31;
     }
 
-    // searching for a device that has key events, and of that events has a space key event
+    // checking is the device a keyboard
     if (libevdev_has_event_type(dev, EV_KEY) && libevdev_has_event_code(dev, EV_KEY, KEY_SPACE)){
 
         ioctl(fd, EVIOCGRAB, 1); // taking the device
@@ -74,6 +74,32 @@ static void add_keyboard(const char *path) {
         close(fd);
     }
 }
+
+static void find_devices() {
+
+    DIR *dir;
+    struct dirent *ent;
+    char path[1024];
+
+    epoll_fd = epoll_create1(0);
+    if(epoll_fd < 0){
+        perror("epoll_create1 fail.");
+        exit(1);
+    }
+
+    // searching for devices
+    if((dir= opendir("/dev/input/")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if(strncmp(ent->d_name, "event", 5) == 0){
+                snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+                add_keyboard(path);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+
 
 typedef struct {
     int x;
