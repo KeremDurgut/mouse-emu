@@ -9,6 +9,12 @@
 #include <string.h>
 #include <stdbool.h>
 #include <dirent.h>
+#include <sys/epoll.h>
+#include <sys/inotify.h>
+#include <sys/time.h>
+#include <libevdev/libevdev.h>
+
+
 
 #ifndef PATH_MAX
 #define PATH_MAX 1024
@@ -22,32 +28,50 @@
 #define TOGGLE false
 #endif
 
-static void list_devices() {
-    DIR *dir;
-    struct dirent *ent;
-    char path[1024];
-    printf("Searching for input devices:\n");
-    if ((dir = opendir("/dev/input/")) != NULL) {
-        while ((ent = readdir(dir)) != NULL) {
-            if (strncmp(ent->d_name, "event", 5) == 0) {
-                sprintf(path, "/dev/input/%s", ent->d_name);
-                int fd = open(path, O_RDONLY);
-                if(fd < 0) {
-                    continue;
-                }
-                // Get device name
-                char name[256];
-                if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
-                    sprintf(name, "Unknown Device");
-                    close(fd);
-                    continue;
-                }
 
-                printf("%s: %s \n", path, name);
+static int epoll_fd;
+static int num_devices = 0;
+static struct lidevdev *devs[64];
+static int device_fds[64];
+
+static void add_keyboard(const char *path) {
+    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0 ) {
+        return 69;
+    }
+
+    struct libevdev *dev = NULL;
+    int rc = libevdev_new_from_fd(fd, &dev);
+    if(rc < 0) {
+        close(fd);
+        return 31;
+    }
+
+    // searching for a device that has key events, and of that events has a space key event
+    if (libevdev_has_event_type(dev, EV_KEY) && libevdev_has_event_code(dev, EV_KEY, KEY_SPACE)){
+
+        ioctl(fd, EVIOCGRAB, 1); // taking the device
+
+        struct epoll_event ev;
+        ev.events = EPOLLIN;
+        ev.data.fd = fd;
+
+        if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev) == 0) {
+            if(num_devices < 64) {
+                devs[num_devices] = dev;
+                device_fds[num_devices] = fd;
+                num_devices ++;
+            } else {
+                libevdev_free(dev);
                 close(fd);
             }
+        }else {
+            libevdev_free(dev);
+            close(fd);
         }
-        closedir(dir);
+    }else {
+        libevdev_free(dev);
+        close(fd);
     }
 }
 
