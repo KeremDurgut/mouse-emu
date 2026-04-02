@@ -266,14 +266,12 @@ int main(int argc, char** argv) {
     if (write(uinput_fd, &uidev, sizeof(uidev)) < 0) {
         perror("Failed to write uinput device");
         close(uinput_fd);
-        close(fd);
         exit(1);
     }
 
     if (ioctl(uinput_fd, UI_DEV_CREATE) < 0) {
         perror("Failed to create uinput device");
         close(uinput_fd);
-        close(fd);
         exit(1);
     }
 
@@ -287,6 +285,16 @@ int main(int argc, char** argv) {
     ev.mouse = false;
     ev.shift = false;
 
+    int inotify_fd = inotify_init();
+        if (inotify_fd >= 0) {
+            inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
+            struct epoll_event in_ev;
+            in_ev.events = EPOLLIN;
+            in_ev.data.fd = inotify_fd;
+            epoll_ctl(epoll_fd, EPOLL_CTL_ADD, inotify_fd, &in_ev);
+        }
+        
+        
     do {
         int rc = read(fd, &e, sizeof(e));
         if (rc < (int)sizeof(e)) {
