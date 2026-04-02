@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
     uidev.id.bustype = BUS_USB;
     uidev.id.vendor = 0x1453;
     uidev.id.product = 0x1299;
-    uidev.id.version = 1;
+    uidev.id.version = 31;
 
     if (write(uinput_fd, &uidev, sizeof(uidev)) < 0) {
         perror("Failed to write uinput device");
