@@ -221,14 +221,14 @@ int main(int argc, char** argv) {
     struct input_event e;
 
     pthread_mutex_init(&lock, NULL);
-    
+
     find_devices();
     if (num_devices == 0) {
         fprintf(stderr, "Could not find a keyboard.");
-        return 1; 
+        return 1;
     }
-    
-    
+
+
     // setting up the input device
     uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (uinput_fd < 0) {
@@ -278,80 +278,135 @@ int main(int argc, char** argv) {
     // Sleep for some time to ensure device is ready
     usleep(300000);
 
-    // Grab the original device
-    ioctl(fd, EVIOCGRAB, 1);
-
     // initial event status
     ev.mouse = false;
     ev.shift = false;
 
     int inotify_fd = inotify_init();
-        if (inotify_fd >= 0) {
-            inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
-            struct epoll_event in_ev;
-            in_ev.events = EPOLLIN;
-            in_ev.data.fd = inotify_fd;
-            epoll_ctl(epoll_fd, EPOLL_CTL_ADD, inotify_fd, &in_ev);
-        }
-        
-        
+    if (inotify_fd >= 0) {
+        inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
+        struct epoll_event in_ev;
+        in_ev.events = EPOLLIN;
+        in_ev.data.fd = inotify_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, inotify_fd, &in_ev);
+    }
+
+    struct epoll_event events[16];
+
+    
+    // checking all the devices
     do {
-        int rc = read(fd, &e, sizeof(e));
-        if (rc < (int)sizeof(e)) {
-            fprintf(stderr, "Failed to read event!\n");
-            break;
-        }
+        int n = epoll_wait(epoll_fd, events, 16, -1);
+               if (n < 0) {
+                   if (errno == EINTR) continue;
+                   perror("epoll_wait failed");
+                   break;
+               }
+               for (int i = 0; i < n; i++) {
+                   int active_fd = events[i].data.fd;
+                   
+                   // 1. DURUM: İşletim sistemi yeni bir cihaz dosyası ekledi (inotify)
+                   if (active_fd == inotify_fd) {
+                       char buffer[4096] __attribute__ ((aligned(__alignof__(struct inotify_event))));
+                       ssize_t len = read(inotify_fd, buffer, sizeof(buffer));
+                       if (len > 0) {
+                           const struct inotify_event *event;
+                           for (char *ptr = buffer; ptr < buffer + len; ptr += sizeof(struct inotify_event) + event->len) {
+                               event = (const struct inotify_event *) ptr;
+                               if ((event->mask & IN_CREATE) && strncmp(event->name, "event", 5) == 0) {
+                                   usleep(200000); // Wait for udev to set permissions
+                                   char new_path[PATH_MAX];
+                                   snprintf(new_path, sizeof(new_path), "/dev/input/%s", event->name);
+                                   add_keyboard(new_path);
+                               }
+                           }
+                       }
+                       continue;
+                   }
 
-        // Process the event
-        if (e.type == EV_KEY) {
-            if (e.code == KEY_POTATO) {
-                for (size_t i = 0; i < 512; i++) {
-                    if (buttons_status[i]) {
-                        do_event(EV_KEY, i, 0);
-                        buttons_status[i] = 0;
-                    }
-                }
-                ev.shift = false;
-                #ifdef DEBUG
-                printf("toggle: %d %d\n", e.value, ev.mouse);
-                #endif
-                if(TOGGLE){
-                    if(e.value == 1){
-                        ev.mouse = !ev.mouse;
-                        if(ev.mouse){
-                            pthread_t thread;
-                            pthread_create(&thread, NULL, loop, NULL);
-                        }
-                    }
-                } else {
-                    bool m = ev.mouse;
-                    ev.mouse = (e.value > 0);
-                    if (ev.mouse && !m) {
-                        pthread_t thread;
-                        pthread_create(&thread, NULL, loop, NULL);
-                    }
-                }
-            }
-            if (e.code == KEY_LEFTSHIFT || e.code == KEY_RIGHTSHIFT) {
-                ev.shift = (e.value > 0);
-            }
-            if (ev.mouse) {
-                process_event(e);
-                if (e.code == KEY_LEFTCTRL || e.code == KEY_LEFTALT || e.code == KEY_LEFTSHIFT || e.code == KEY_LEFTMETA) {
-                    do_event(EV_KEY, e.code, e.value);
-                }
-            } else {
-                buttons_status[e.code] = e.value;
-                do_event(EV_KEY, e.code, e.value);
-            }
-        }
-    } while (1);
 
-    // Cleanup
-    ioctl(uinput_fd, UI_DEV_DESTROY);
-    close(uinput_fd);
-    close(fd);
-    pthread_mutex_destroy(&lock);
-
-    return 0;
-}
+                   int rc = read(active_fd, &e, sizeof(e));
+                               if (rc < 0) {
+                                   if (errno == ENODEV) {
+                                       for (int j = 0; j < num_devices; j++) {
+                                           if (device_fds[j] == active_fd) {
+                                               fprintf(stderr, "\n[!] Klavye bağlantısı koptu: %s\n", libevdev_get_name(devs[j]));
+                                               epoll_ctl(epoll_fd, EPOLL_CTL_DEL, active_fd, NULL);
+                                               libevdev_free(devs[j]);
+                                               close(active_fd);
+                                               for (int k = j; k < num_devices - 1; k++) {
+                                                   devs[k] = devs[k+1];
+                                                   device_fds[k] = device_fds[k+1];
+                                               }
+                                               num_devices--;
+                                               break;
+                                           }
+                                       }
+                                       // Reset toggles in case mouse was active
+                                       pthread_mutex_lock(&lock);
+                                       loop_enabled = false;
+                                       pthread_mutex_unlock(&lock);
+                                       ev.mouse = false;
+                                       ev.shift = false;
+                                       memset(buttons_status, 0, sizeof(buttons_status));
+                                   }
+                                   continue;
+                               } else if (rc < (int)sizeof(e)) {
+                                   continue;
+                               }
+                   
+                               // Process the event
+                           if (e.type == EV_KEY) {
+                               if (e.code == KEY_POTATO) {
+                                   for (size_t i = 0; i < 512; i++) {
+                                       if (buttons_status[i]) {
+                                           do_event(EV_KEY, i, 0);
+                                           buttons_status[i] = 0;
+                                       }
+                                   }
+                                   ev.shift = false;
+                                   #ifdef DEBUG
+                                   printf("toggle: %d %d\n", e.value, ev.mouse);
+                                   #endif
+                                   if(TOGGLE){
+                                       if(e.value == 1){
+                                           ev.mouse = !ev.mouse;
+                                           if(ev.mouse){
+                                               pthread_t thread;
+                                               pthread_create(&thread, NULL, loop, NULL);
+                                           }
+                                       }
+                                   } else {
+                                       bool m = ev.mouse;
+                                       ev.mouse = (e.value > 0);
+                                       if (ev.mouse && !m) {
+                                           pthread_t thread;
+                                           pthread_create(&thread, NULL, loop, NULL);
+                                       }
+                                   }
+                               }
+                               if (e.code == KEY_LEFTSHIFT || e.code == KEY_RIGHTSHIFT) {
+                                   ev.shift = (e.value > 0);
+                               }
+                               if (ev.mouse) {
+                                   process_event(e);
+                                   if (e.code == KEY_LEFTCTRL || e.code == KEY_LEFTALT || e.code == KEY_LEFTSHIFT || e.code == KEY_LEFTMETA) {
+                                       do_event(EV_KEY, e.code, e.value);
+                                   }
+                               } else {
+                                   buttons_status[e.code] = e.value;
+                                   do_event(EV_KEY, e.code, e.value);
+                               }
+                           }
+                           }
+                       } while (1);
+                   
+                       // Cleanup
+                       ioctl(uinput_fd, UI_DEV_DESTROY);
+                       close(uinput_fd);
+                       cleanup_devs_list();
+                       if (inotify_fd >= 0) close(inotify_fd);
+                       pthread_mutex_destroy(&lock);
+                   
+                       return 0;
+                   }
