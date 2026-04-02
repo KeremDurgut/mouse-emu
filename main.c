@@ -31,20 +31,20 @@
 
 static int epoll_fd;
 static int num_devices = 0;
-static struct lidevdev *devs[64];
+static struct libevdev *devs[64];
 static int device_fds[64];
 
 static void add_keyboard(const char *path) {
     int fd = open(path, O_RDONLY | O_NONBLOCK);
     if (fd < 0 ) {
-        return 69;
+        return;
     }
 
     struct libevdev *dev = NULL;
     int rc = libevdev_new_from_fd(fd, &dev);
     if(rc < 0) {
         close(fd);
-        return 31;
+        return;
     }
 
     // checking is the device a keyboard
@@ -102,7 +102,7 @@ static void find_devices() {
 static void cleanup_devs_list() {
     for (int i = 0; i < num_devices; i++){
         ioctl(device_fds[i], EVIOCGRAB, 0); // unloading
-        livevdev_free(devs[i]);
+        libevdev_free(devs[i]);
         close(device_fds[i]);
     }
     close(epoll_fd);
@@ -217,7 +217,7 @@ static void process_event(struct input_event e) {
 
 static int buttons_status[512];
 
-int main(int argc, char** argv) {
+int main() {
     struct input_event e;
 
     pthread_mutex_init(&lock, NULL);
@@ -293,7 +293,7 @@ int main(int argc, char** argv) {
 
     struct epoll_event events[16];
 
-    
+
     // checking all the devices
     do {
         int n = epoll_wait(epoll_fd, events, 16, -1);
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
                }
                for (int i = 0; i < n; i++) {
                    int active_fd = events[i].data.fd;
-                   
+
                    // 1. DURUM: İşletim sistemi yeni bir cihaz dosyası ekledi (inotify)
                    if (active_fd == inotify_fd) {
                        char buffer[4096] __attribute__ ((aligned(__alignof__(struct inotify_event))));
@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
                                } else if (rc < (int)sizeof(e)) {
                                    continue;
                                }
-                   
+
                                // Process the event
                            if (e.type == EV_KEY) {
                                if (e.code == KEY_POTATO) {
@@ -400,13 +400,13 @@ int main(int argc, char** argv) {
                            }
                            }
                        } while (1);
-                   
+
                        // Cleanup
                        ioctl(uinput_fd, UI_DEV_DESTROY);
                        close(uinput_fd);
                        cleanup_devs_list();
                        if (inotify_fd >= 0) close(inotify_fd);
                        pthread_mutex_destroy(&lock);
-                   
+
                        return 0;
                    }
