@@ -99,7 +99,14 @@ static void find_devices() {
     }
 }
 
-
+static void cleanup_devs_list() {
+    for (int i = 0; i < num_devices; i++){
+        ioctl(device_fds[i], EVIOCGRAB, 0); // unloading
+        livevdev_free(devs[i]);
+        close(device_fds[i]);
+    }
+    close(epoll_fd);
+}
 
 typedef struct {
     int x;
@@ -143,7 +150,7 @@ static void* loop(void* arg) {
     pthread_mutex_unlock(&lock);
     (void) arg;
     while(1) {
-        int slow = ev.shift ? 5 : 1;
+        int slow = ev.shift ? 5 : 2; // 5x -> normal mode cursor speek : 2x -> shift mode cursor speed
         usleep(1337 * slow);
         if (!ev.mouse) {
             pthread_mutex_lock(&lock);
@@ -214,28 +221,21 @@ int main(int argc, char** argv) {
     struct input_event e;
 
     pthread_mutex_init(&lock, NULL);
-    char dev_path[PATH_MAX];
-    if (argc < 2) {
-        list_devices();
-        return 0;
-    } else {
-        strncpy(dev_path, argv[1], sizeof(dev_path));
+    
+    find_devices();
+    if (num_devices == 0) {
+        fprintf(stderr, "Could not find a keyboard.");
+        return 1; 
     }
-
-    // Open the input device
-    int fd = open(dev_path, O_RDONLY);
-    if (fd < 0) {
-        perror("Failed to open device");
-        exit(1);
-    }
-
-    // Setup uinput device
+    
+    
+    // setting up the input device
     uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (uinput_fd < 0) {
         perror("Failed to open uinput");
-        close(fd);
-        exit(1);
+        return 1;
     }
+
 
     // Enable events for the virtual device
     ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY);
