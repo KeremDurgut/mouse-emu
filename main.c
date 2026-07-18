@@ -43,7 +43,27 @@ static void list_devices() {
                     continue;
                 }
 
-                printf("%s: %s \n", path, name);
+                // Check if device supports KEY_POTATO
+                unsigned long keybits[(KEY_MAX + 1) / (sizeof(unsigned long) * 8) + 1];
+                memset(keybits, 0, sizeof(keybits));
+                if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits) < 0) {
+                    close(fd);
+                    continue;
+                }
+                int kb_idx = KEY_POTATO / (sizeof(unsigned long) * 8);
+                int kb_bit = KEY_POTATO % (sizeof(unsigned long) * 8);
+                if (!(keybits[kb_idx] & (1UL << kb_bit))) {
+                    close(fd);
+                    continue;
+                }
+
+                struct input_id id;
+                if (ioctl(fd, EVIOCGID, &id) < 0) {
+                    close(fd);
+                    continue;
+                }
+
+                printf("[ 0x%04x:0x%04x ] %s: %s\n", id.vendor, id.product, path, name);
                 close(fd);
             }
         }
@@ -160,6 +180,46 @@ static void process_event(struct input_event e) {
 
 static int buttons_status[512];
 
+static char* find_device_by_name(const char *name) {
+    static char dev_path[PATH_MAX];
+    unsigned int search_vendor = 0, search_product = 0;
+    bool search_by_id = (sscanf(name, "%x:%x", &search_vendor, &search_product) == 2);
+    DIR *dir = opendir("/dev/input/");
+    if (dir == NULL) return NULL;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strncmp(ent->d_name, "event", 5) != 0) continue;
+        sprintf(dev_path, "/dev/input/%s", ent->d_name);
+        int tmpfd = open(dev_path, O_RDONLY);
+        if (tmpfd < 0) continue;
+        if (search_by_id) {
+            struct input_id id;
+            if (ioctl(tmpfd, EVIOCGID, &id) < 0) {
+                close(tmpfd);
+                continue;
+            }
+            close(tmpfd);
+            if (id.vendor == search_vendor && id.product == search_product) {
+                closedir(dir);
+                return dev_path;
+            }
+        } else {
+            char devname[256];
+            if (ioctl(tmpfd, EVIOCGNAME(sizeof(devname)), devname) < 0) {
+                close(tmpfd);
+                continue;
+            }
+            close(tmpfd);
+            if (strstr(devname, name)) {
+                closedir(dir);
+                return dev_path;
+            }
+        }
+    }
+    closedir(dir);
+    return NULL;
+}
+
 int main(int argc, char** argv) {
     struct input_event e;
 
@@ -168,8 +228,17 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         list_devices();
         return 0;
-    } else {
+    } else if (strncmp(argv[1], "/dev/", 5) == 0) {
         strncpy(dev_path, argv[1], sizeof(dev_path));
+    } else {
+        char *found = find_device_by_name(argv[1]);
+        if (!found) {
+            fprintf(stderr, "Device not found: %s\n", argv[1]);
+            list_devices();
+            exit(1);
+        }
+        strncpy(dev_path, found, sizeof(dev_path));
+        printf("Found device: %s -> %s\n", dev_path, argv[1]);
     }
 
     // Open the input device
