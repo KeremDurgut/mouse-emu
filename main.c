@@ -185,9 +185,6 @@ static int buttons_status[512];
 
 static char* find_device_by_name(const char *name) {
     static char dev_path[PATH_MAX];
-    bool search_by_id = (strstr(name, "0x") == name);
-    char search_id[256] = "";
-    if (search_by_id) sprintf(search_id, "[%s", name);
     DIR *dir = opendir("/dev/input/");
     if (dir == NULL) return NULL;
     struct dirent *ent;
@@ -203,23 +200,23 @@ static char* find_device_by_name(const char *name) {
         }
         char phys[256] = "";
         ioctl(tmpfd, EVIOCGPHYS(sizeof(phys)), phys);
-        close(tmpfd);
         char id_str[512];
         sprintf(id_str, "0x%04x:0x%04x:%s", id.vendor, id.product, phys);
-        if (strstr(id_str, search_id)) {
+        if (strstr(id_str, name)) {
             closedir(dir);
             return dev_path;
         }
+        
         char devname[256];
         if (ioctl(tmpfd, EVIOCGNAME(sizeof(devname)), devname) < 0) {
             close(tmpfd);
             continue;
-        }
-        close(tmpfd);
+         }
         if (strstr(devname, name)) {
             closedir(dir);
             return dev_path;
         }
+        close(tmpfd);
     }
     closedir(dir);
     return NULL;
@@ -239,8 +236,7 @@ int main(int argc, char** argv) {
         char *found = find_device_by_name(argv[1]);
         if (!found) {
             fprintf(stderr, "Device not found: %s\n", argv[1]);
-            list_devices();
-            exit(1);
+            return 1;
         }
         strncpy(dev_path, found, sizeof(dev_path));
         printf("Found device: %s -> %s\n", dev_path, argv[1]);
