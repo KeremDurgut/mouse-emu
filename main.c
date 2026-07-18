@@ -63,7 +63,10 @@ static void list_devices() {
                     continue;
                 }
 
-                printf("[ 0x%04x:0x%04x ] %s: %s\n", id.vendor, id.product, path, name);
+                char phys[256] = "";
+                ioctl(fd, EVIOCGPHYS(sizeof(phys)), phys);
+
+                printf("[ 0x%04x:0x%04x:%s ] %s: %s\n", id.vendor, id.product, phys, path, name);
                 close(fd);
             }
         }
@@ -182,8 +185,9 @@ static int buttons_status[512];
 
 static char* find_device_by_name(const char *name) {
     static char dev_path[PATH_MAX];
-    unsigned int search_vendor = 0, search_product = 0;
-    bool search_by_id = (sscanf(name, "%x:%x", &search_vendor, &search_product) == 2);
+    bool search_by_id = (strstr(name, "0x") == name);
+    char search_id[256] = "";
+    if (search_by_id) sprintf(search_id, "[%s", name);
     DIR *dir = opendir("/dev/input/");
     if (dir == NULL) return NULL;
     struct dirent *ent;
@@ -192,28 +196,29 @@ static char* find_device_by_name(const char *name) {
         sprintf(dev_path, "/dev/input/%s", ent->d_name);
         int tmpfd = open(dev_path, O_RDONLY);
         if (tmpfd < 0) continue;
-        if (search_by_id) {
-            struct input_id id;
-            if (ioctl(tmpfd, EVIOCGID, &id) < 0) {
-                close(tmpfd);
-                continue;
-            }
+        struct input_id id;
+        if (ioctl(tmpfd, EVIOCGID, &id) < 0) {
             close(tmpfd);
-            if (id.vendor == search_vendor && id.product == search_product) {
-                closedir(dir);
-                return dev_path;
-            }
-        } else {
-            char devname[256];
-            if (ioctl(tmpfd, EVIOCGNAME(sizeof(devname)), devname) < 0) {
-                close(tmpfd);
-                continue;
-            }
+            continue;
+        }
+        char phys[256] = "";
+        ioctl(tmpfd, EVIOCGPHYS(sizeof(phys)), phys);
+        close(tmpfd);
+        char id_str[512];
+        sprintf(id_str, "0x%04x:0x%04x:%s", id.vendor, id.product, phys);
+        if (strstr(id_str, search_id)) {
+            closedir(dir);
+            return dev_path;
+        }
+        char devname[256];
+        if (ioctl(tmpfd, EVIOCGNAME(sizeof(devname)), devname) < 0) {
             close(tmpfd);
-            if (strstr(devname, name)) {
-                closedir(dir);
-                return dev_path;
-            }
+            continue;
+        }
+        close(tmpfd);
+        if (strstr(devname, name)) {
+            closedir(dir);
+            return dev_path;
         }
     }
     closedir(dir);
