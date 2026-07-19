@@ -311,9 +311,19 @@ int main(int argc, char** argv) {
         int rc = read(fd, &e, sizeof(e));
         if (rc < (int)sizeof(e)) {
             fprintf(stderr, "Failed to read event!\n");
-            break;
+            printf("Trying to reconnect to the device...\n"); 
+            do {
+                fd = open(dev_path, O_RDONLY);
+                if (fd < 0) {
+                    perror("Failed to open device");
+                    // wait 3 seconds before trying again
+                    usleep(3000000);
+                }else{
+                    printf("Succesfully reconnected to the device!\n");
+              }
+            }while (fd < 0);
         }
-
+    
         // Process the event
         if (e.type == EV_KEY) {
             if (e.code == KEY_POTATO) {
